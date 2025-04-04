@@ -99,6 +99,76 @@ sub BUILD {
   }
 }
 
+# This function detects changes between two versions. Four scenarios are possible:
+# v1  | v2
+# X   | Y:RX | It was renamed to Y from X   - rename
+# X   | X*   | Something changed inside     - alter
+# -   | X    | No field in the old version  - create
+# X   | -    | No field in the new version  - drop
+
+# For each of this scenario corresponding callback is fired: rename, alter, drop, create.
+# Additionally 'next' callback if fired for every comparison. It could be used to prepare
+# data structures where to fill the comparison/diff result.
+# The callbacks are called with the next parameters:
+# rename( $src_version, $dst_version )
+# alter ( $src_version, $dst_version )
+# create( $dst_version )
+# drop  ( $src_version )
+# next  ( $dst_name, $dst_version )
+# Where:
+#   $dst_name    - the name of a destination object
+#   $src_version - a source object we want to migrate from
+#   $dst_version - a destination object we want to migrate to
+
+sub _detect_changes {
+  my( $changes, $src, $dst, $is_renamed, $get_name, $has_previous ) =  @_;
+
+  # Hash of renames: { old_name => SomeClass::Obj new_name }
+  # Where the key is the name of target object
+  # and the value is the source object
+  my $renames =  {};
+  # Find renamed destination objects and store corresponding source object there. Eg.
+  # if X object was renamed to 'y', then hash will be { y => X }.
+  for my $xsource ( @$dst ) {
+    my $name =  $is_renamed->( $xsource )   or next;
+    my( $dst_name, $src_version ) =  ( $get_name->( $xsource ), $has_previous->( $name ) );
+
+    $renames->{ $dst_name } =  $src_version;
+  }
+
+  my $src_used =  {};
+  # For each destination object trigger corresponding callback.
+  for my $dst_version ( @$dst ) {
+    my $dst_name =  $get_name->( $dst_version );
+    $changes->{ next }   and $changes->{ next }( $dst_name, $dst_version );
+
+    my $src_version =  $renames->{ $dst_name };
+    if( $src_version ) {
+      $changes->{ rename }( $src_version, $dst_version );
+    }
+    # Notice, when 'rename' happened we should call 'alter' which will check changes
+    # inside objects between source and destination.
+    if( $src_version //=  $has_previous->( $get_name->( $dst_version ) ) ) {
+      $changes->{ alter }( $src_version, $dst_version );
+      $src_used->{ $get_name->( $src_version ) } =  1;
+      next;
+    }
+
+    # We are here when there is no SRC version
+    $changes->{ create }( $dst_version );
+  }
+
+  # Drop each SRC object which does not have corresponding DST object.
+  for my $src_version ( @$src ) {
+    next   if $src_used->{ $get_name->( $src_version ) };
+
+    $changes->{ drop }( $src_version );
+  }
+
+
+  return $changes;
+}
+
 sub compute_differences {
   my ($self) = @_;
 
@@ -114,57 +184,33 @@ sub compute_differences {
     $preprocess->($target_schema);
   }
 
-  my %src_tables_checked = ();
-  my @tar_tables         = sort { $a->name cmp $b->name } $target_schema->get_tables;
-  ## do original/source tables exist in target?
-  for my $tar_table (@tar_tables) {
-    my $tar_table_name = $tar_table->name;
+  my $changes = {
+    next   =>  sub{
+      my( $name ) =  @_;
+      $self->table_diff_hash->{ $name } =  { map { $_ => [] } @diff_hash_keys };
+    },
+    create =>  sub{ push @{ $self->tables_to_create }, shift },
+    drop   =>  sub{ push @{ $self->tables_to_drop   }, shift },
+    rename =>  sub{ $self->table_diff_hash->{ $_[1]->name }{ table_renamed_from } = [ [ @_ ] ] },
+    alter  =>  sub{
+      $self->diff_table_options( @_ );
 
-    my $src_table;
+      ## Compare fields, their types, defaults, sizes etc etc
+      $self->diff_table_fields( @_ );
 
-    $self->table_diff_hash->{$tar_table_name} = { map { $_ => [] } @diff_hash_keys };
+      $self->diff_table_indexes( @_ );
+      $self->diff_table_constraints( @_ );
+    },
+  };
 
-    if (my $old_name = $tar_table->extra('renamed_from')) {
-      $src_table = $source_schema->get_table($old_name, $self->case_insensitive);
-      if ($src_table) {
-        $self->table_diff_hash->{$tar_table_name}{table_renamed_from} = [ [ $src_table, $tar_table ] ];
-      } else {
-        delete $tar_table->extra->{renamed_from};
-        carp qq#Renamed table can't find old table "$old_name" for renamed table\n#;
-      }
-    } else {
-      $src_table = $source_schema->get_table($tar_table_name, $self->case_insensitive);
-    }
+  my( $src, $dst ) =  ($source_schema, $target_schema);
+  _detect_changes( $changes,
+    scalar $src->get_tables, scalar $dst->get_tables,
+    sub{ shift->extra( 'renamed_from' ) },
+    sub{ shift->name                    },
+    sub{ $src->get_table( shift, $self->case_insensitive ) },
+  );
 
-    unless ($src_table) {
-      ## table is new
-      ## add table(s) later.
-      push @{ $self->tables_to_create }, $tar_table;
-      next;
-    }
-
-    my $src_table_name = $src_table->name;
-    $src_table_name = lc $src_table_name if $self->case_insensitive;
-    $src_tables_checked{$src_table_name} = 1;
-
-    $self->diff_table_options($src_table, $tar_table);
-
-    ## Compare fields, their types, defaults, sizes etc etc
-    $self->diff_table_fields($src_table, $tar_table);
-
-    $self->diff_table_indexes($src_table, $tar_table);
-    $self->diff_table_constraints($src_table, $tar_table);
-
-  }    # end of target_schema->get_tables loop
-
-  for my $src_table ($source_schema->get_tables) {
-    my $src_table_name = $src_table->name;
-
-    $src_table_name = lc $src_table_name if $self->case_insensitive;
-
-    push @{ $self->tables_to_drop }, $src_table
-        unless $src_tables_checked{$src_table_name};
-  }
 
   return $self;
 }
@@ -366,57 +412,40 @@ CONSTRAINT_DROP:
 sub diff_table_fields {
   my ($self, $src_table, $tar_table) = @_;
 
-  # List of ones we've renamed from so we don't drop them
-  my %renamed_source_fields;
+  my $skip;
+  my $diff_hash =  $self->table_diff_hash->{$tar_table};
+  my $changes = {
+    create =>  sub{ push @{ $diff_hash->{fields_to_create} }, shift  },
+    drop   =>  sub{ push @{ $diff_hash->{fields_to_drop}   }, shift  },
+    rename =>  sub{ push @{ $diff_hash->{fields_to_rename} }, [ @_ ]; $skip = 1; },
+    alter  =>  sub{
+      my( $src, $dst ) =  @_;
 
-  for my $tar_table_field ($tar_table->get_fields) {
-    my $f_tar_name = $tar_table_field->name;
+      # XXX: rename_xxx should rename, alter_xxx should alter, but ::Producers automatically
+      # calls 'alter_xxx' from theirs 'rename_xxx'. Workaround that here:
+      if( $skip ) { $skip = 0; return; }
 
-    if (my $old_name = $tar_table_field->extra->{renamed_from}) {
-      my $src_table_field = $src_table->get_field($old_name, $self->case_insensitive);
-      unless ($src_table_field) {
-        carp qq#Renamed column can't find old column "@{[$src_table->name]}.$old_name" for renamed column\n#;
-        delete $tar_table_field->extra->{renamed_from};
-      } else {
-        push @{ $self->table_diff_hash->{$tar_table}{fields_to_rename} }, [ $src_table_field, $tar_table_field ];
-        $renamed_source_fields{$old_name} = 1;
-        next;
+      # field exists, something changed. This is a bit complex. Parsers can
+      # normalize types, but only some of them do, so compare the normalized and
+      # parsed types for each field to each other
+      if ( !$dst->equals($src, $self->case_insensitive)
+        && !$dst->equals($src->parsed_field, $self->case_insensitive)
+        && !$dst->parsed_field->equals($src,               $self->case_insensitive)
+        && !$dst->parsed_field->equals($src->parsed_field, $self->case_insensitive)
+      ) {
+        # Some producers might need src field to diff against
+        push @{ $diff_hash->{fields_to_alter} }, [ $src, $dst ];
       }
-    }
+    },
+  };
 
-    my $src_table_field = $src_table->get_field($f_tar_name, $self->case_insensitive);
-
-    unless ($src_table_field) {
-      push @{ $self->table_diff_hash->{$tar_table}{fields_to_create} }, $tar_table_field;
-      next;
-    }
-
-    # field exists, something changed. This is a bit complex. Parsers can
-    # normalize types, but only some of them do, so compare the normalized and
-    # parsed types for each field to each other
-    if ( !$tar_table_field->equals($src_table_field, $self->case_insensitive)
-      && !$tar_table_field->equals($src_table_field->parsed_field, $self->case_insensitive)
-      && !$tar_table_field->parsed_field->equals($src_table_field,               $self->case_insensitive)
-      && !$tar_table_field->parsed_field->equals($src_table_field->parsed_field, $self->case_insensitive)) {
-
-      # Some producers might need src field to diff against
-      push @{ $self->table_diff_hash->{$tar_table}{fields_to_alter} }, [ $src_table_field, $tar_table_field ];
-      next;
-    }
-  }
-
-  # Now check to see if any fields from src_table need to be dropped
-  for my $src_table_field ($src_table->get_fields) {
-    my $f_src_name = $src_table_field->name;
-    next if $renamed_source_fields{$f_src_name};
-
-    my $tar_table_field = $tar_table->get_field($f_src_name, $self->case_insensitive);
-
-    unless ($tar_table_field) {
-      push @{ $self->table_diff_hash->{$tar_table}{fields_to_drop} }, $src_table_field;
-      next;
-    }
-  }
+  my( $src, $dst ) =  ( $src_table, $tar_table );
+  _detect_changes( $changes,
+    scalar $src->get_fields, scalar $dst->get_fields,
+    sub{ shift->extra->{renamed_from} },
+    sub{ shift->name                  },
+    sub{ $src->get_field( shift, $self->case_insensitive ) },
+  );
 }
 
 sub diff_table_options {
