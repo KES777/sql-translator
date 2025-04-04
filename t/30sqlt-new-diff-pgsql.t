@@ -22,15 +22,12 @@ local $SIG{__WARN__} = sub {
 
 
 use_ok('SQL::Translator::Diff') or die "Cannot continue\n";
-
-my $tr = SQL::Translator->new;
-
 my ($source_schema, $target_schema) = map {
   my $t = SQL::Translator->new;
   $t->parser('YAML')
-      or die $tr->error;
+      or die $t->error;
   my $out = $t->translate(catfile($Bin, qw/data diff pgsql/, $_))
-      or die $tr->error;
+      or die $t->error;
 
   my $schema = $t->schema;
   unless ($schema->name) {
