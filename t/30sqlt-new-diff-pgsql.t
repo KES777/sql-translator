@@ -15,6 +15,12 @@ use Storable 'dclone';
 
 plan tests => 4;
 
+my @warns;
+local $SIG{__WARN__} = sub {
+  push @warns, $_[0] =~ s/\s+$//r;
+};
+
+
 use_ok('SQL::Translator::Diff') or die "Cannot continue\n";
 
 my $tr = SQL::Translator->new;
@@ -55,6 +61,10 @@ CREATE TABLE "added" (
   "id" bigint
 );
 
+CREATE TABLE "fake_rename" (
+  "fake_rename" integer
+);
+
 ALTER TABLE "employee" DROP CONSTRAINT "FK5302D47D93FE702E";
 
 ALTER TABLE "employee" DROP COLUMN "job_title";
@@ -63,6 +73,8 @@ ALTER TABLE "employee" ADD CONSTRAINT "FK5302D47D93FE702E_diff" FOREIGN KEY ("em
   REFERENCES "person" ("person_id") DEFERRABLE;
 
 ALTER TABLE "old_name" RENAME TO "new_name";
+
+ALTER TABLE "new_name" ADD COLUMN "fake_rename" integer;
 
 ALTER TABLE "new_name" ADD COLUMN "new_field" integer;
 
@@ -124,9 +136,15 @@ CREATE TABLE added (
   id bigint
 );
 
+CREATE TABLE fake_rename (
+  fake_rename integer
+);
+
 ALTER TABLE employee DROP COLUMN job_title;
 
 ALTER TABLE old_name RENAME TO new_name;
+
+ALTER TABLE new_name ADD COLUMN fake_rename integer;
 
 ALTER TABLE new_name ADD COLUMN new_field integer;
 
@@ -170,3 +188,8 @@ eq_or_diff($out, <<'## END OF DIFF', "No differences found");
 -- No differences found;
 
 ## END OF DIFF
+
+is shift @warns, q!SQL::Translator::Diff::schema_diff(): Renamed table can't find old table "not_exists" for renamed table!,
+  'Warning: old table not found';
+is shift @warns, q!SQL::Translator::Diff::schema_diff(): Renamed column can't find old column "old_name.not_exists" for renamed column!,
+  'Warning: old column not found';
