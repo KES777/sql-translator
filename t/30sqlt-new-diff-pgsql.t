@@ -20,21 +20,25 @@ local $SIG{__WARN__} = sub {
   push @warns, $_[0] =~ s/\s+$//r;
 };
 
+sub load {
+  return map {
+    my $t = SQL::Translator->new;
+    $t->parser('YAML')
+        or die $t->error;
+    my $out = $t->translate(catfile($Bin, qw/data diff pgsql/, $_))
+        or die $t->error;
+
+    my $schema = $t->schema;
+    unless ($schema->name) {
+      $schema->name($_);
+    }
+    ($schema);
+  } @_;
+}
+
 
 use_ok('SQL::Translator::Diff') or die "Cannot continue\n";
-my ($source_schema, $target_schema) = map {
-  my $t = SQL::Translator->new;
-  $t->parser('YAML')
-      or die $t->error;
-  my $out = $t->translate(catfile($Bin, qw/data diff pgsql/, $_))
-      or die $t->error;
-
-  my $schema = $t->schema;
-  unless ($schema->name) {
-    $schema->name($_);
-  }
-  ($schema);
-} (qw( create1.yml create2.yml ));
+my ($source_schema, $target_schema) = load( 'create1.yml', 'create2.yml' );
 
 # Test for differences
 my $out = SQL::Translator::Diff::schema_diff(
