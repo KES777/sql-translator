@@ -83,6 +83,8 @@ ALTER TABLE "person" DROP CONSTRAINT "UC_age_name";
 
 DROP INDEX "u_name";
 
+ALTER TABLE "person" RENAME COLUMN "description" TO "physical_description";
+
 ALTER TABLE "person" ADD COLUMN "is_rock_star" smallint DEFAULT 1;
 
 ALTER TABLE "person" ALTER COLUMN "person_id" TYPE serial;
@@ -98,8 +100,6 @@ ALTER TABLE "person" ALTER COLUMN "iq" TYPE bigint;
 ALTER TABLE "person" ALTER COLUMN "nickname" SET NOT NULL;
 
 ALTER TABLE "person" ALTER COLUMN "nickname" TYPE character varying(24);
-
-ALTER TABLE "person" RENAME COLUMN "description" TO "physical_description";
 
 ALTER TABLE "person" ADD CONSTRAINT "unique_name" UNIQUE ("name");
 
@@ -151,6 +151,8 @@ ALTER TABLE new_name ADD COLUMN new_field integer;
 
 ALTER TABLE person DROP CONSTRAINT UC_age_name;
 
+ALTER TABLE person RENAME COLUMN description TO physical_description;
+
 ALTER TABLE person ADD COLUMN is_rock_star smallint DEFAULT 1;
 
 ALTER TABLE person ALTER COLUMN person_id TYPE serial;
@@ -166,8 +168,6 @@ ALTER TABLE person ALTER COLUMN iq TYPE bigint;
 ALTER TABLE person ALTER COLUMN nickname SET NOT NULL;
 
 ALTER TABLE person ALTER COLUMN nickname TYPE character varying(24);
-
-ALTER TABLE person RENAME COLUMN description TO physical_description;
 
 ALTER TABLE person ADD CONSTRAINT UC_person_id UNIQUE (person_id);
 
@@ -190,10 +190,10 @@ eq_or_diff($out, <<'## END OF DIFF', "No differences found");
 
 ## END OF DIFF
 
-is shift @warns, q!SQL::Translator::Diff::schema_diff(): Renamed table can't find old table "not_exists" for renamed table!,
-  'Warning: old table not found';
 is shift @warns, q!SQL::Translator::Diff::schema_diff(): Renamed column can't find old column "old_name.not_exists" for renamed column!,
   'Warning: old column not found';
+is shift @warns, q!SQL::Translator::Diff::schema_diff(): Renamed table can't find old table "not_exists" for renamed table!,
+  'Warning: old table not found';
 
 
 sub diff_it {

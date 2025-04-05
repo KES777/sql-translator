@@ -292,13 +292,17 @@ sub produce_diff_sql {
           ()
         }
 
+      # Renames should go first, otherwise it could not be possible to add a new column with
+      # the name which was just renamed to something. Eg. SRC:x->DST:y, Create DST:x.
+      # Otherwise we can not run 'Create DST:x', because schema still have 'x' column.
+
       } qw/rename_table
           alter_drop_constraint
           alter_drop_index
           drop_field
+          rename_field
           add_field
           alter_field
-          rename_field
           alter_create_index
           alter_create_constraint
           alter_table/),
