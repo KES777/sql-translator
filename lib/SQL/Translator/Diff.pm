@@ -123,17 +123,26 @@ sub BUILD {
 sub _detect_changes {
   my( $changes, $src, $dst, $is_renamed, $get_name, $has_previous ) =  @_;
 
-  # Hash of renames: { old_name => SomeClass::Obj new_name }
+  # Hash of renamed_to: { new_name => SomeClass::Obj old_name }
   # Where the key is the name of target object
   # and the value is the source object
-  my $renames =  {};
+  my $renamed_to =  {};
+
+  # Hash of renamed_from { old_name => 1 }
+  # Where the key is the name of object which was renamed to something different.
+  # Required to exclude previous versions. Eg. if SRC has x and DST has x it does not
+  # mean that something was changed inside x. It could be possible that DST:x was
+  # renamed from SRC:y, thus SRC:x should not be counted as previous version of DST:x.
+  my $renamed_from =  {};
+
   # Find renamed destination objects and store corresponding source object there. Eg.
   # if X object was renamed to 'y', then hash will be { y => X }.
   for my $xsource ( @$dst ) {
     my $name =  $is_renamed->( $xsource )   or next;
     my( $dst_name, $src_version ) =  ( $get_name->( $xsource ), $has_previous->( $name ) );
 
-    $renames->{ $dst_name } =  $src_version;
+    $renamed_from->{ $name   } =  1;
+    $renamed_to->{ $dst_name } =  $src_version;
   }
 
   my $src_used =  {};
@@ -142,13 +151,13 @@ sub _detect_changes {
     my $dst_name =  $get_name->( $dst_version );
     $changes->{ next }   and $changes->{ next }( $dst_name, $dst_version );
 
-    my $src_version =  $renames->{ $dst_name };
+    my $src_version =  $renamed_to->{ $dst_name };
     if( $src_version ) {
       $changes->{ rename }( $src_version, $dst_version );
     }
     # Notice, when 'rename' happened we should call 'alter' which will check changes
     # inside objects between source and destination.
-    if( $src_version //=  $has_previous->( $get_name->( $dst_version ) ) ) {
+    if( $src_version //=  !$renamed_from->{ $dst_name } && $has_previous->( $dst_name ) ) {
       $changes->{ alter }( $src_version, $dst_version );
       $src_used->{ $get_name->( $src_version ) } =  1;
       next;
