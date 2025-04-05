@@ -152,7 +152,10 @@ sub _detect_changes {
     $changes->{ next }   and $changes->{ next }( $dst_name, $dst_version );
 
     my $src_version =  $renamed_to->{ $dst_name };
-    if( $src_version ) {
+    # Corner case: sometimes field is marked as renamed, but does not have previous
+    # version. This happens when user forgot to remove this mark for the next migration.
+    # Eg. v1 x; v2 y:rx; v3 y:rx
+    if( exists $renamed_to->{ $dst_name } ) {
       $changes->{ rename }( $src_version, $dst_version );
     }
     # Notice, when 'rename' happened we should call 'alter' which will check changes
@@ -200,7 +203,16 @@ sub compute_differences {
     },
     create =>  sub{ push @{ $self->tables_to_create }, shift },
     drop   =>  sub{ push @{ $self->tables_to_drop   }, shift },
-    rename =>  sub{ $self->table_diff_hash->{ $_[1]->name }{ table_renamed_from } = [ [ @_ ] ] },
+    rename =>  sub{
+      my( $src, $dst ) =  @_;
+      if( $src ) {
+        $self->table_diff_hash->{ $_[1]->name }{ table_renamed_from } = [ [ $src, $dst ] ]
+      }
+      else {
+        my $old_name =  delete $dst->extra->{ renamed_from };
+        carp qq#Renamed table can't find old table "$old_name" for renamed table\n#;
+      }
+    },
     alter  =>  sub{
       $self->diff_table_options( @_ );
 
@@ -430,7 +442,16 @@ sub diff_table_fields {
   my $changes = {
     create =>  sub{ push @{ $diff_hash->{fields_to_create} }, shift  },
     drop   =>  sub{ push @{ $diff_hash->{fields_to_drop}   }, shift  },
-    rename =>  sub{ push @{ $diff_hash->{fields_to_rename} }, [ @_ ]; $skip = 1; },
+    rename =>  sub{
+      my( $src, $dst ) =  @_;
+      if( $src ) {
+        push @{ $diff_hash->{fields_to_rename} }, [ $src, $dst ]; $skip = 1;
+      }
+      else {
+        my $old_name =  delete $dst->extra->{renamed_from};
+        carp qq#Renamed column can't find old column "@{[$src_table->name]}.$old_name" for renamed column\n#;
+      }
+    },
     alter  =>  sub{
       my( $src, $dst ) =  @_;
 
