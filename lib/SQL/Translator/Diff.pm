@@ -149,7 +149,7 @@ sub _detect_changes {
   # For each destination object trigger corresponding callback.
   for my $dst_version ( @$dst ) {
     my $dst_name =  $get_name->( $dst_version );
-    $changes->{ next }   and $changes->{ next }( $dst_name, $dst_version );
+    $changes->{ init }   and $changes->{ init }( $dst_name, $dst_version );
 
     my $src_version =  $renamed_to->{ $dst_name };
     # Corner case: sometimes field is marked as renamed, but does not have previous
@@ -197,7 +197,7 @@ sub compute_differences {
   }
 
   my $changes = {
-    next   =>  sub{
+    init   =>  sub{
       my( $name ) =  @_;
       $self->table_diff_hash->{ $name } =  { map { $_ => [] } @diff_hash_keys };
     },
