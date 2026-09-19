@@ -121,7 +121,7 @@ sub BUILD {
 #   $dst_version - a destination object we want to migrate to
 
 sub _detect_changes {
-  my( $changes, $src, $dst, $is_renamed, $get_name, $has_previous ) =  @_;
+  my( $actions, $src, $dst, $is_renamed, $get_name, $has_previous ) =  @_;
 
   # Hash of renamed_to: { new_name => SomeClass::Obj old_name }
   # Where the key is the name of target object
@@ -149,36 +149,36 @@ sub _detect_changes {
   # For each destination object trigger corresponding callback.
   for my $dst_version ( @$dst ) {
     my $dst_name =  $get_name->( $dst_version );
-    $changes->{ init }   and $changes->{ init }( $dst_name, $dst_version );
+    $actions->{ init }   and $actions->{ init }( $dst_name, $dst_version );
 
     my $src_version =  $renamed_to->{ $dst_name };
     # Corner case: sometimes field is marked as renamed, but does not have previous
     # version. This happens when user forgot to remove this mark for the next migration.
     # Eg. v1 x; v2 y:rx; v3 y:rx
     if( exists $renamed_to->{ $dst_name } ) {
-      $changes->{ rename }( $src_version, $dst_version );
+      $actions->{ rename }( $src_version, $dst_version );
     }
     # Notice, when 'rename' happened we should call 'alter' which will check changes
     # inside objects between source and destination.
     if( $src_version //=  !$renamed_from->{ $dst_name } && $has_previous->( $dst_name ) ) {
-      $changes->{ alter }( $src_version, $dst_version );
+      $actions->{ alter }( $src_version, $dst_version );
       $src_used->{ $get_name->( $src_version ) } =  1;
       next;
     }
 
     # We are here when there is no SRC version
-    $changes->{ create }( $dst_version );
+    $actions->{ create }( $dst_version );
   }
 
   # Drop each SRC object which does not have corresponding DST object.
   for my $src_version ( @$src ) {
     next   if $src_used->{ $get_name->( $src_version ) };
 
-    $changes->{ drop }( $src_version );
+    $actions->{ drop }( $src_version );
   }
 
 
-  return $changes;
+  return $actions;
 }
 
 sub compute_differences {
@@ -196,7 +196,7 @@ sub compute_differences {
     $preprocess->($target_schema);
   }
 
-  my $changes = {
+  my $actions = {
     init   =>  sub{
       my( $name ) =  @_;
       $self->table_diff_hash->{ $name } =  { map { $_ => [] } @diff_hash_keys };
@@ -225,7 +225,7 @@ sub compute_differences {
   };
 
   my( $src, $dst ) =  ($source_schema, $target_schema);
-  _detect_changes( $changes,
+  _detect_changes( $actions,
     scalar $src->get_tables, scalar $dst->get_tables,
     sub{ shift->extra( 'renamed_from' ) },
     sub{ shift->name                    },
@@ -439,7 +439,7 @@ sub diff_table_fields {
 
   my $skip;
   my $diff_hash =  $self->table_diff_hash->{$tar_table};
-  my $changes = {
+  my $actions = {
     create =>  sub{ push @{ $diff_hash->{fields_to_create} }, shift  },
     drop   =>  sub{ push @{ $diff_hash->{fields_to_drop}   }, shift  },
     rename =>  sub{
@@ -474,7 +474,7 @@ sub diff_table_fields {
   };
 
   my( $src, $dst ) =  ( $src_table, $tar_table );
-  _detect_changes( $changes,
+  _detect_changes( $actions,
     scalar $src->get_fields, scalar $dst->get_fields,
     sub{ shift->extra->{renamed_from} },
     sub{ shift->name                  },
