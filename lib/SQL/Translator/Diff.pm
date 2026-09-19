@@ -121,7 +121,7 @@ sub BUILD {
 #   $dst_version - a destination object we want to migrate to
 
 sub _detect_changes {
-  my( $actions, $src, $dst, $is_renamed, $get_name, $has_previous ) =  @_;
+  my( $actions, $src, $dst, $check_renamed, $get_name, $has_previous ) =  @_;
 
   # Hash of renamed_to: { new_name => SomeClass::Obj old_name }
   # Where the key is the name of target object
@@ -138,7 +138,7 @@ sub _detect_changes {
   # Find renamed destination objects and store corresponding source object there. Eg.
   # if X object was renamed to 'y', then hash will be { y => X }.
   for my $xsource ( @$dst ) {
-    my $name =  $is_renamed->( $xsource )   or next;
+    my $name =  $check_renamed->( $xsource )   or next;
     my( $dst_name, $src_version ) =  ( $get_name->( $xsource ), $has_previous->( $name ) );
 
     $renamed_from->{ $name   } =  1;
