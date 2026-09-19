@@ -107,14 +107,14 @@ sub BUILD {
 # X   | -    | No field in the new version  - on_drop
 
 # For each of this scenario corresponding callback is fired: on_rename, on_alter, on_drop, on_create.
-# Additionally 'next' callback if fired for every comparison. It could be used to prepare
-# data structures where to fill the comparison/diff result.
+# Additionally 'on_init' callback if fired for every comparison/every field if you like.
+# 'on_init' could be used to prepare data structures where to fill the comparison/diff result.
 # The callbacks are called with the next parameters:
+# on_init  ( $dst_name,    $dst_version )
 # on_rename( $src_version, $dst_version )
 # on_alter ( $src_version, $dst_version )
 # on_create( $dst_version )
 # on_drop  ( $src_version )
-# next  ( $dst_name, $dst_version )
 # Where:
 #   $dst_name    - the name of a destination object
 #   $src_version - a source object we want to migrate from
