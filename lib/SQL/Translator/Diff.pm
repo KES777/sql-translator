@@ -101,19 +101,19 @@ sub BUILD {
 
 # This function detects changes between two versions. Four scenarios are possible:
 # v1  | v2
-# X   | Y:RX | It was renamed to Y from X   - rename
-# X   | X*   | Something changed inside     - alter
-# -   | X    | No field in the old version  - create
-# X   | -    | No field in the new version  - drop
+# X   | Y:RX | It was renamed to Y from X   - on_rename
+# X   | X*   | Something changed inside     - on_alter
+# -   | X    | No field in the old version  - on_create
+# X   | -    | No field in the new version  - on_drop
 
-# For each of this scenario corresponding callback is fired: rename, alter, drop, create.
+# For each of this scenario corresponding callback is fired: on_rename, on_alter, on_drop, on_create.
 # Additionally 'next' callback if fired for every comparison. It could be used to prepare
 # data structures where to fill the comparison/diff result.
 # The callbacks are called with the next parameters:
-# rename( $src_version, $dst_version )
-# alter ( $src_version, $dst_version )
-# create( $dst_version )
-# drop  ( $src_version )
+# on_rename( $src_version, $dst_version )
+# on_alter ( $src_version, $dst_version )
+# on_create( $dst_version )
+# on_drop  ( $src_version )
 # next  ( $dst_name, $dst_version )
 # Where:
 #   $dst_name    - the name of a destination object
@@ -149,32 +149,32 @@ sub _detect_changes {
   # For each destination object trigger corresponding callback.
   for my $dst_version ( @$dst ) {
     my $dst_name =  $get_name->( $dst_version );
-    $actions->{ init }   and $actions->{ init }( $dst_name, $dst_version );
+    $actions->{ on_init }   and $actions->{ on_init }( $dst_name, $dst_version );
 
     my $src_version =  $renamed_to->{ $dst_name };
     # Corner case: sometimes field is marked as renamed, but does not have previous
     # version. This happens when user forgot to remove this mark for the next migration.
     # Eg. v1 x; v2 y:rx; v3 y:rx
     if( exists $renamed_to->{ $dst_name } ) {
-      $actions->{ rename }( $src_version, $dst_version );
+      $actions->{ on_rename }( $src_version, $dst_version );
     }
-    # Notice, when 'rename' happened we should call 'alter' which will check changes
+    # Notice, when 'on_rename' happened we should call 'on_alter' which will check changes
     # inside objects between source and destination.
     if( $src_version //=  !$renamed_from->{ $dst_name } && $has_previous->( $dst_name ) ) {
-      $actions->{ alter }( $src_version, $dst_version );
+      $actions->{ on_alter }( $src_version, $dst_version );
       $src_used->{ $get_name->( $src_version ) } =  1;
       next;
     }
 
     # We are here when there is no SRC version
-    $actions->{ create }( $dst_version );
+    $actions->{ on_create }( $dst_version );
   }
 
   # Drop each SRC object which does not have corresponding DST object.
   for my $src_version ( @$src ) {
     next   if $src_used->{ $get_name->( $src_version ) };
 
-    $actions->{ drop }( $src_version );
+    $actions->{ on_drop }( $src_version );
   }
 
 
@@ -197,13 +197,13 @@ sub compute_differences {
   }
 
   my $actions = {
-    init   =>  sub{
+    on_init   =>  sub{
       my( $name ) =  @_;
       $self->table_diff_hash->{ $name } =  { map { $_ => [] } @diff_hash_keys };
     },
-    create =>  sub{ push @{ $self->tables_to_create }, shift },
-    drop   =>  sub{ push @{ $self->tables_to_drop   }, shift },
-    rename =>  sub{
+    on_create =>  sub{ push @{ $self->tables_to_create }, shift },
+    on_drop   =>  sub{ push @{ $self->tables_to_drop   }, shift },
+    on_rename =>  sub{
       my( $src, $dst ) =  @_;
       if( $src ) {
         $self->table_diff_hash->{ $_[1]->name }{ table_renamed_from } = [ [ $src, $dst ] ]
@@ -213,7 +213,7 @@ sub compute_differences {
         carp qq#Renamed table can't find old table "$old_name" for renamed table\n#;
       }
     },
-    alter  =>  sub{
+    on_alter  =>  sub{
       $self->diff_table_options( @_ );
 
       ## Compare fields, their types, defaults, sizes etc etc
@@ -440,9 +440,9 @@ sub diff_table_fields {
   my $skip;
   my $diff_hash =  $self->table_diff_hash->{$tar_table};
   my $actions = {
-    create =>  sub{ push @{ $diff_hash->{fields_to_create} }, shift  },
-    drop   =>  sub{ push @{ $diff_hash->{fields_to_drop}   }, shift  },
-    rename =>  sub{
+    on_create =>  sub{ push @{ $diff_hash->{fields_to_create} }, shift  },
+    on_drop   =>  sub{ push @{ $diff_hash->{fields_to_drop}   }, shift  },
+    on_rename =>  sub{
       my( $src, $dst ) =  @_;
       if( $src ) {
         push @{ $diff_hash->{fields_to_rename} }, [ $src, $dst ]; $skip = 1;
@@ -452,10 +452,10 @@ sub diff_table_fields {
         carp qq#Renamed column can't find old column "@{[$src_table->name]}.$old_name" for renamed column\n#;
       }
     },
-    alter  =>  sub{
+    on_alter  =>  sub{
       my( $src, $dst ) =  @_;
 
-      # XXX: rename_xxx should rename, alter_xxx should alter, but ::Producers automatically
+      # XXX: rename_xxx should on_rename, alter_xxx should alter, but ::Producers automatically
       # calls 'alter_xxx' from theirs 'rename_xxx'. Workaround that here:
       if( $skip ) { $skip = 0; return; }
 
